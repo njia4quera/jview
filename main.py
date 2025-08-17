@@ -68,8 +68,8 @@ def start_data_grabber():
     global data_grabber
     
     try:
-        # Create and start the data grabber
-        # You can modify these parameters or read from environment variables
+        Create and start the data grabber
+        You can modify these parameters or read from environment variables
         data_grabber = create_grabber(
             grabber_type='zmq',
             store=store,
@@ -78,7 +78,7 @@ def start_data_grabber():
             topic=os.getenv('CAMERA_TOPIC', 'camera_frames'),
             polling_interval=float(os.getenv('POLLING_INTERVAL', '0.1'))
         )
-        
+
         logger.info("Starting data grabber...")
         data_grabber.start()
         logger.info("Data grabber started successfully")

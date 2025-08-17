@@ -257,6 +257,110 @@ class ZMQDataGrabber(DataGrabber):
         self._cleanup()
 
 
+class DummyGrabber(DataGrabber):
+    """
+    Dummy data grabber for testing and demonstration purposes.
+    
+    Generates fake 512x512 random images at 1Hz rate with simulated metadata.
+    """
+    
+    def __init__(self, store, image_size: int = 512, frame_rate: float = 1.0, **kwargs):
+        """
+        Initialize the dummy data grabber.
+        
+        Args:
+            store: Reference to the viewer's data store
+            image_size: Size of generated images (width=height)
+            frame_rate: Rate of data generation in Hz
+            **kwargs: Additional arguments
+        """
+        super().__init__(store, polling_interval=1.0/frame_rate)
+        self.image_size = image_size
+        self.frame_rate = frame_rate
+        self.frame_counter = 0
+        
+        logger.info(f"DummyGrabber initialized: {image_size}x{image_size} images at {frame_rate}Hz")
+    
+    def get_data(self) -> Optional[Tuple[Dict[str, np.ndarray], Dict[str, Any]]]:
+        """
+        Generate fake data for testing.
+        
+        Returns:
+            Tuple of (frames, metadata) with simulated camera data
+        """
+        # Generate random image data
+        raw_frame = np.random.normal(1000, 100, size=(self.image_size, self.image_size)).astype(np.float32)
+        processed_frame = np.random.normal(500, 50, size=(self.image_size, self.image_size)).astype(np.float32)
+        
+        # Add some simulated structure to make images more interesting
+        x, y = np.meshgrid(np.linspace(-1, 1, self.image_size), np.linspace(-1, 1, self.image_size))
+        structure = 200 * np.exp(-(x**2 + y**2) / 0.3) * np.sin(2 * np.pi * (x + y))
+        raw_frame += structure.astype(np.float32)
+        processed_frame += structure.astype(np.float32)
+        
+        frames = {
+            "raw": raw_frame,
+            "processed": processed_frame
+        }
+        
+        # Generate simulated metadata
+        metadata = {
+            "exposure_time_ms": np.random.uniform(10, 100),
+            "gain": np.random.uniform(1.0, 4.0),
+            "temperature_C": np.random.uniform(20, 25),
+            "humidity_percent": np.random.uniform(40, 60),
+            "pressure_mbar": np.random.uniform(1010, 1020),
+            "timestamp": time.time(),
+            "frame_number": self.frame_counter
+        }
+        
+        self.frame_counter += 1
+        
+        return frames, metadata
+    
+    def _regulate_data(self, frames: Dict[str, np.ndarray], metadata: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], int, str]:
+        """
+        Regulate dummy data format for viewer compatibility.
+        
+        Args:
+            frames: Raw frames from dummy source
+            metadata: Raw metadata from dummy source
+            
+        Returns:
+            Tuple of (processed_frames, processed_metadata, shot_id, shot_name)
+        """
+        processed_frames = {}
+        processed_metadata = metadata.copy()
+        
+        # Process each frame
+        for frame_name, frame_data in frames.items():
+            if frame_data is None:
+                continue
+                
+            # Ensure frame is a numpy array
+            if not isinstance(frame_data, np.ndarray):
+                frame_data = np.array(frame_data)
+            
+            # Validate frame dimensions
+            if frame_data.ndim != 2:
+                logger.warning(f"Frame {frame_name} has {frame_data.ndim} dimensions, expected 2D")
+                continue
+            
+            # Convert to float32 for viewer compatibility
+            if frame_data.dtype != np.float32:
+                frame_data = frame_data.astype(np.float32, copy=False)
+            
+            # Store processed frame
+            processed_frames[frame_name] = frame_data
+        
+        # Generate shot information
+        self.shot_counter += 1
+        shot_id = self.shot_counter
+        shot_name = f"Dummy_{shot_id}"
+        
+        return processed_frames, processed_metadata, shot_id, shot_name
+
+
 # Convenience function for creating grabbers
 def create_grabber(grabber_type: str, store, **kwargs) -> DataGrabber:
     """
@@ -272,6 +376,8 @@ def create_grabber(grabber_type: str, store, **kwargs) -> DataGrabber:
     """
     if grabber_type.lower() == 'zmq':
         return ZMQDataGrabber(store, **kwargs)
+    elif grabber_type.lower() == 'dummy':
+        return DummyGrabber(store, **kwargs)
     # TODO: Add other grabber types here
     # elif grabber_type.lower() == 'pulsar':
     #     return PulsarDataGrabber(store, **kwargs)
