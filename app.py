@@ -527,4 +527,4 @@ if __name__ == "__main__":
     #     add_shot({"frames": frames, "meta": meta})
 
     # For remote producers, expose on 0.0.0.0 and consider TLS/reverse proxy.
-    app.run(debug=True, host="127.0.0.1", port=8050)
+    app.run(debug=True, host="172.16.100.104", port=8050)
