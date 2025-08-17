@@ -20,7 +20,7 @@ CAMERA_PORT = 5555
 CAMERA_TOPIC = "camera_frames"
 
 # Data processing settings
-POLLING_INTERVAL = 0.1  # seconds
+POLLING_INTERVAL = 0.5  # seconds
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
@@ -143,222 +143,153 @@ class DataGrabber(ABC):
         return self.running and self.thread and self.thread.is_alive()
 
 
-class ZMQDataGrabber(DataGrabber):
+class RemoteInstrumentImageGrabber(DataGrabber):
     """
-    ZMQ-based data grabber for receiving camera frames from a ZMQ server.
+    Data grabber using quetzal-instruments RemoteInstrument for camera control.
     
-    This implementation connects to a ZMQ publisher/subscriber pattern
-    to receive camera data and metadata.
+    This implementation connects to a remote camera server and acquires image data
+    with duplicate detection using image hashing for robust shot identification.
     """
     
-    def __init__(self, store, host: str = CAMERA_HOST, port: int = CAMERA_PORT, 
-                 topic: str = CAMERA_TOPIC, polling_interval: float = POLLING_INTERVAL):
+    def __init__(self, store, host: str, port: int, **kwargs):
         """
-        Initialize the ZMQ data grabber.
+        Initialize the remote instrument image grabber.
         
         Args:
             store: Reference to the viewer's data store
-            host: ZMQ server host address
-            port: ZMQ server port
-            topic: ZMQ topic to subscribe to
-            polling_interval: Time between data acquisition attempts (seconds)
+            host: Camera server host address
+            port: Camera server port
+            **kwargs: Additional arguments passed to parent class
         """
-        super().__init__(store, polling_interval)
+        super().__init__(store, **kwargs)
         self.host = host
         self.port = port
-        self.topic = topic
         
-        # TODO: Initialize ZMQ connection here
-        # - Create ZMQ context
-        # - Create subscriber socket
-        # - Connect to server
-        # - Subscribe to topic
+        # Initialize RemoteInstrument - fail fast if connection fails
+        try:
+            from quetzal.instruments.remote import RemoteInstrument
+            self.remote_instrument = RemoteInstrument(host, port)
+            logger.info(f"Connected to camera server at {host}:{port}")
+        except Exception as e:
+            logger.error(f"Failed to connect to camera server: {e}")
+            import sys
+            sys.exit(1)  # Quit app on connection failure
         
-        logger.info(f"ZMQDataGrabber initialized for {host}:{port}/{topic}")
+        # Initialize duplicate detection
+        self._last_hash = None
+        self._last_timestamp = None
     
     def get_data(self) -> Optional[Tuple[Dict[str, np.ndarray], Dict[str, Any]]]:
         """
-        Receive data from ZMQ server.
+        Acquire data from remote camera server.
         
         Returns:
             Tuple of (frames, metadata) or None if no data available
         """
-        # TODO: Implement ZMQ data reception
-        # - Receive message from ZMQ socket
-        # - Parse frame data and metadata
-        # - Convert to appropriate numpy arrays
-        # - Return (frames, metadata) tuple
+        try:
+            # Call remote method and extract data
+            result = self.remote_instrument.get_shot_data()
+            frames = result.get('frames', {})
+            metadata = result.get('meta', {})
+            
+            # Check if this is a new shot
+            if not self._is_new_shot(frames, metadata):
+                return None  # Skip duplicate shots
+
+            return frames, metadata
+            
+        except Exception as e:
+            logger.error(f"Error getting shot data: {e}")
+            return None
+    
+    def _is_new_shot(self, frames: Dict[str, np.ndarray], metadata: Dict[str, Any]) -> bool:
+        """
+        Check if this is a new shot based on image content hashing.
         
-        # Note: The base class will automatically regulate this data
-        # through the _regulate_data method before pushing to the store
-        
-        # Placeholder return - replace with actual implementation
-        return None
+        Args:
+            frames: Dictionary of frame data
+            metadata: Shot metadata
+            
+        Returns:
+            True if this is a new shot, False if duplicate
+        """
+        try:
+            # Get the main frame for hashing (usually 'raw' or 'processed')
+            main_frame = frames.get('raw') or frames.get('processed') or next(iter(frames.values()))
+            if main_frame is None:
+                return True
+            
+            # Ensure frame is numpy array
+            if not isinstance(main_frame, np.ndarray):
+                main_frame = np.asarray(main_frame)
+            
+            # Hash the frame content
+            import hashlib
+            content_hash = hashlib.blake2b(main_frame.tobytes(), digest_size=16)
+            current_hash = content_hash.hexdigest()
+            
+            # Check if hash is different from last shot
+            if self._last_hash is not None:
+                if current_hash == self._last_hash:
+                    return False  # Duplicate shot
+            
+            # Update hash for next comparison
+            self._last_hash = current_hash
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Error in duplicate detection: {e}")
+            # If hashing fails, assume it's new data
+            return True
     
     def _regulate_data(self, frames: Dict[str, np.ndarray], metadata: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], int, str]:
         """
-        Regulate and convert ZMQ camera data format to viewer-compatible format.
+        Regulate remote instrument data format for viewer compatibility.
         
         Args:
-            frames: Raw frames from ZMQ camera source
-            metadata: Raw metadata from ZMQ camera source
+            frames: Raw frames from remote camera source
+            metadata: Raw metadata from remote camera source
             
         Returns:
             Tuple of (processed_frames, processed_metadata, shot_id, shot_name)
         """
-        # TODO: Implement ZMQ-specific data regulation
-        # - Process frames according to ZMQ camera format
-        # - Extract and validate metadata
-        # - Generate appropriate shot_id and shot_name
-        # - Return processed data ready for viewer store
+        # Extract shot info from metadata when possible
+        shot_id = metadata.get('shot_id')
+        shot_name = metadata.get('shot_name')
         
-        # Placeholder implementation - replace with actual ZMQ data processing
+        # Generate shot info if not provided in metadata
+        if shot_id is None:
+            self.shot_counter += 1
+            shot_id = self.shot_counter
+        
+        if shot_name is None:
+            # shot_name = f"Remote_{shot_id}"
+            shot_name = metadata.get('timestamp')   
+        
+        # Minimal processing - just ensure frames are numpy arrays
         processed_frames = {}
-        processed_metadata = metadata.copy() if isinstance(metadata, dict) else {}
-        
-        # Process each frame
         for frame_name, frame_data in frames.items():
-            if frame_data is None:
-                continue
-                
-            # Ensure frame is a numpy array
-            if not isinstance(frame_data, np.ndarray):
-                frame_data = np.array(frame_data)
-            
-            # Validate frame dimensions
-            if frame_data.ndim != 2:
-                logger.warning(f"Frame {frame_name} has {frame_data.ndim} dimensions, expected 2D")
-                continue
-            
-            # Convert to float32 for viewer compatibility
-            if frame_data.dtype != np.float32:
-                frame_data = frame_data.astype(np.float32, copy=False)
-            
-            # Store processed frame
-            processed_frames[frame_name] = frame_data
+            if frame_data is not None:
+                # Convert to numpy array if needed
+                if not isinstance(frame_data, np.ndarray):
+                    frame_data = np.asarray(frame_data)
+                processed_frames[frame_name] = frame_data
         
-        # Generate shot information
-        self.shot_counter += 1
-        shot_id = self.shot_counter
-        shot_name = f"ZMQ_{shot_id}"
+        # Add timestamp if not present
+        if 'timestamp' not in metadata:
+            metadata['timestamp'] = time.time()
         
-        return processed_frames, processed_metadata, shot_id, shot_name
-    
-    def _cleanup(self):
-        """Clean up ZMQ resources."""
-        # TODO: Implement ZMQ cleanup
-        # - Close socket
-        # - Terminate context
-        pass
+        return processed_frames, metadata, shot_id, shot_name
     
     def stop(self):
-        """Stop the data grabber and cleanup ZMQ resources."""
+        """Stop the data grabber and cleanup remote instrument connection."""
         super().stop()
-        self._cleanup()
-
-
-class DummyGrabber(DataGrabber):
-    """
-    Dummy data grabber for testing and demonstration purposes.
-    
-    Generates fake 512x512 random images at 1Hz rate with simulated metadata.
-    """
-    
-    def __init__(self, store, image_size: int = 512, frame_rate: float = 1.0, **kwargs):
-        """
-        Initialize the dummy data grabber.
-        
-        Args:
-            store: Reference to the viewer's data store
-            image_size: Size of generated images (width=height)
-            frame_rate: Rate of data generation in Hz
-            **kwargs: Additional arguments
-        """
-        super().__init__(store, polling_interval=1.0/frame_rate)
-        self.image_size = image_size
-        self.frame_rate = frame_rate
-        self.frame_counter = 0
-        
-        logger.info(f"DummyGrabber initialized: {image_size}x{image_size} images at {frame_rate}Hz")
-    
-    def get_data(self) -> Optional[Tuple[Dict[str, np.ndarray], Dict[str, Any]]]:
-        """
-        Generate fake data for testing.
-        
-        Returns:
-            Tuple of (frames, metadata) with simulated camera data
-        """
-        # Generate random image data
-        raw_frame = np.random.normal(1000, 100, size=(self.image_size, self.image_size)).astype(np.float32)
-        processed_frame = np.random.normal(500, 50, size=(self.image_size, self.image_size)).astype(np.float32)
-        
-        # Add some simulated structure to make images more interesting
-        x, y = np.meshgrid(np.linspace(-1, 1, self.image_size), np.linspace(-1, 1, self.image_size))
-        structure = 200 * np.exp(-(x**2 + y**2) / 0.3) * np.sin(2 * np.pi * (x + y))
-        raw_frame += structure.astype(np.float32)
-        processed_frame += structure.astype(np.float32)
-        
-        frames = {
-            "raw": raw_frame,
-            "processed": processed_frame
-        }
-        
-        # Generate simulated metadata
-        metadata = {
-            "exposure_time_ms": np.random.uniform(10, 100),
-            "gain": np.random.uniform(1.0, 4.0),
-            "temperature_C": np.random.uniform(20, 25),
-            "humidity_percent": np.random.uniform(40, 60),
-            "pressure_mbar": np.random.uniform(1010, 1020),
-            "timestamp": time.time(),
-            "frame_number": self.frame_counter
-        }
-        
-        self.frame_counter += 1
-        
-        return frames, metadata
-    
-    def _regulate_data(self, frames: Dict[str, np.ndarray], metadata: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Dict[str, Any], int, str]:
-        """
-        Regulate dummy data format for viewer compatibility.
-        
-        Args:
-            frames: Raw frames from dummy source
-            metadata: Raw metadata from dummy source
-            
-        Returns:
-            Tuple of (processed_frames, processed_metadata, shot_id, shot_name)
-        """
-        processed_frames = {}
-        processed_metadata = metadata.copy()
-        
-        # Process each frame
-        for frame_name, frame_data in frames.items():
-            if frame_data is None:
-                continue
-                
-            # Ensure frame is a numpy array
-            if not isinstance(frame_data, np.ndarray):
-                frame_data = np.array(frame_data)
-            
-            # Validate frame dimensions
-            if frame_data.ndim != 2:
-                logger.warning(f"Frame {frame_name} has {frame_data.ndim} dimensions, expected 2D")
-                continue
-            
-            # Convert to float32 for viewer compatibility
-            if frame_data.dtype != np.float32:
-                frame_data = frame_data.astype(np.float32, copy=False)
-            
-            # Store processed frame
-            processed_frames[frame_name] = frame_data
-        
-        # Generate shot information
-        self.shot_counter += 1
-        shot_id = self.shot_counter
-        shot_name = f"Dummy_{shot_id}"
-        
-        return processed_frames, processed_metadata, shot_id, shot_name
+        try:
+            if hasattr(self, 'remote_instrument'):
+                self.remote_instrument.close()
+                logger.info("Remote instrument connection closed")
+        except Exception as e:
+            logger.warning(f"Error closing remote instrument: {e}")
 
 
 # Convenience function for creating grabbers
@@ -367,7 +298,7 @@ def create_grabber(grabber_type: str, store, **kwargs) -> DataGrabber:
     Factory function to create data grabbers.
     
     Args:
-        grabber_type: Type of grabber ('zmq', 'pulsar', etc.)
+        grabber_type: Type of grabber ('zmq', 'dummy', 'quetzal', etc.)
         store: Reference to the viewer's data store
         **kwargs: Additional arguments for the specific grabber type
     
@@ -378,6 +309,8 @@ def create_grabber(grabber_type: str, store, **kwargs) -> DataGrabber:
         return ZMQDataGrabber(store, **kwargs)
     elif grabber_type.lower() == 'dummy':
         return DummyGrabber(store, **kwargs)
+    elif grabber_type.lower() == 'quetzal':
+        return RemoteInstrumentImageGrabber(store, **kwargs)
     # TODO: Add other grabber types here
     # elif grabber_type.lower() == 'pulsar':
     #     return PulsarDataGrabber(store, **kwargs)

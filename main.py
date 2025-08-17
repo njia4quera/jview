@@ -4,6 +4,11 @@ Main entry point for the Cold Atom Imaging Dashboard with Data Grabber.
 
 This script starts both the Dash viewer application and the data grabber service,
 coordinating their startup and shutdown.
+
+Environment Variables:
+    CAMERA_HOST: Camera server host address (default: localhost)
+    CAMERA_PORT: Camera server port (default: 60637 for real camera)
+    POLLING_INTERVAL: Data acquisition interval in seconds (default: 0.05 for 20Hz)
 """
 
 import os
@@ -68,15 +73,14 @@ def start_data_grabber():
     global data_grabber
     
     try:
-        Create and start the data grabber
-        You can modify these parameters or read from environment variables
+        # Create and start the data grabber
+        # You can modify these parameters or read from environment variables
         data_grabber = create_grabber(
-            grabber_type='zmq',
+            grabber_type='quetzal',  # Use quetzal-instruments grabber
             store=store,
-            host=os.getenv('CAMERA_HOST', '192.168.1.100'),
-            port=int(os.getenv('CAMERA_PORT', '5555')),
-            topic=os.getenv('CAMERA_TOPIC', 'camera_frames'),
-            polling_interval=float(os.getenv('POLLING_INTERVAL', '0.1'))
+            host=os.getenv('CAMERA_HOST', '172.16.190.95'),
+            port=int(os.getenv('CAMERA_PORT', '60637')),  # Real camera port
+            polling_interval=float(os.getenv('POLLING_INTERVAL', '0.5'))  # 20Hz for low delay
         )
 
         logger.info("Starting data grabber...")
